@@ -1,5 +1,9 @@
 ## Criteo Sample
 
+Predict how likely a person is to click on an advertisement.
+
+- - -
+
 The Criteo sample demonstrates the capability of both linear and deep models on
 the [criteo dataset](https://www.kaggle.com/c/criteo-display-ad-challenge).
 
@@ -9,18 +13,11 @@ the [criteo dataset](https://www.kaggle.com/c/criteo-display-ad-challenge).
     [here](https://cloud.google.com/ml/docs/how-tos/getting-set-up) before
     trying the sample. More documentation about Cloud ML is available
     [here](https://cloud.google.com/ml/docs/).
-*   Make sure you have installed
-    [Tensorflow](https://www.tensorflow.org/install/) if you want to run the
-    sample locally.
-*   Make sure you have installed
-    [tensorflow-transform](https://github.com/tensorflow/transform).
 *   Make sure your Google Cloud project has sufficient quota.
-*   Tensorflow has a dependency on a particular version of protobuf. Please run
-    the following after installing tensorflow-transform:
 
-```
-pip install --upgrade protobuf==3.1.0
-```
+## Install Dependencies
+
+Install dependencies by running `pip install -r requirements.txt`
 
 ## Sample Overview
 
@@ -95,25 +92,34 @@ In order to run pre-processing on the Cloud run the commands below.
 ```
 PROJECT=$(gcloud config list project --format "value(core.project)")
 BUCKET="gs://${PROJECT}-ml"
+```
 
+
+```
 # Small dataset
-GCS_PATH="${BUCKET}/${USER}/smallclicks"
+GCS_PATH_SMALL="${BUCKET}/${USER}/smallclicks"
 head -40800000 $LOCAL_DATA_DIR/train.txt > $LOCAL_DATA_DIR/train-40m.txt
 tail -5000000 $LOCAL_DATA_DIR/train.txt > $LOCAL_DATA_DIR/eval-5m.txt
-gsutil -m cp $LOCAL_DATA_DIR/train-40m.txt $LOCAL_DATA_DIR/eval-5m.txt $GCS_PATH
-python preprocess.py --training_data $GCS_PATH/train-40m.txt \
-                     --eval_data $GCS_PATH/eval-5m.txt \
-                     --output_dir $GCS_PATH/preproc \
-                     --project_id $PROJECT \
-                     --cloud
+gsutil -m cp $LOCAL_DATA_DIR/train-40m.txt $LOCAL_DATA_DIR/eval-5m.txt $GCS_PATH_SMALL
 
+PREPROCESS_OUTPUT_SMALL="${GCS_PATH_SMALL}/criteo_$(date +%Y%m%d_%H%M%S)"
+python preprocess.py --training_data "${GCS_PATH_SMALL}/train-40m.txt" \
+                     --eval_data "${GCS_PATH_SMALL}/eval-5m.txt" \
+                     --output_dir "${PREPROCESS_OUTPUT_SMALL}" \
+                     --project_id "${PROJECT}" \
+                     --cloud
+```
+
+```
 # Large dataset
-GCS_PATH="${BUCKET}/${USER}/largeclicks"
-gsutil mv $GCS_PATH/day_23.txt $GCS_PATH/eval_day_23.txt
-python preprocess.py --training_data $GCS_PATH/day_* \
-                     --eval_data $GCS_PATH/eval_day_* \
-                     --output_dir $GCS_PATH/preproc \
-                     --project_id $PROJECT \
+GCS_PATH_LARGE="${BUCKET}/${USER}/largeclicks"
+gsutil mv $GCS_PATH_LARGE/day_23.txt $GCS_PATH_LARGE/eval_day_23.txt
+
+PREPROCESS_OUTPUT_LARGE="${GCS_PATH_LARGE}/criteo_$(date +%Y%m%d_%H%M%S)"
+python preprocess.py --training_data "${GCS_PATH_LARGE}/day_*" \
+                     --eval_data "${GCS_PATH_LARGE}/eval_day_*" \
+                     --output_dir "${PREPROCESS_OUTPUT_LARGE}" \
+                     --project_id "${PROJECT}" \
                      --frequency_threshold 1000
                      --cloud
 ```
@@ -170,6 +176,14 @@ at least 2 hours to train, and the deep model more than 8 hours. You can use
 [Tensorboard](https://www.tensorflow.org/how_tos/summaries_and_tensorboard/) to
 follow the job's progress.
 
+#### How to run Tensorboard
+
+You can run Tensorboard using the command:
+
+```
+tensorboard --logdir=$TRAINING_OUTPUT_PATH
+```
+
 ### Cloud Run for the Small Dataset
 
 You can train using either a single worker (config-single.yaml), or using
@@ -178,8 +192,8 @@ multiple workers and parameter servers (config-small.yaml).
 To train the linear model:
 
 ```
-JOB_ID="smallclicks_linear_${USER}_$(date +%Y%m%d_%H%M%S)"
-gcloud beta ml jobs submit training "$JOB_ID" \
+JOB_ID="smallclicks_linear_$(date +%Y%m%d_%H%M%S)"
+gcloud ml-engine jobs submit training "$JOB_ID" \
   --module-name trainer.task \
   --package-path trainer \
   --staging-bucket "$BUCKET" \
@@ -190,19 +204,19 @@ gcloud beta ml jobs submit training "$JOB_ID" \
   --dataset kaggle \
   --model_type linear \
   --l2_regularization 100 \
-  --output_path "${GCS_PATH}/output/${JOB_ID}" \
-  --raw_metadata_path "${GCS_PATH}/preproc/raw_metadata" \
-  --transformed_metadata_path "${GCS_PATH}/preproc/transformed_metadata" \
-  --transform_savedmodel "${GCS_PATH}/preproc/transform_fn" \
-  --eval_data_paths "${GCS_PATH}/preproc/features_eval*" \
-  --train_data_paths "${GCS_PATH}/preproc/features_train*"
+  --output_path "${GCS_PATH_SMALL}/model/${JOB_ID}" \
+  --raw_metadata_path "${PREPROCESS_OUTPUT_SMALL}/raw_metadata" \
+  --transformed_metadata_path "${PREPROCESS_OUTPUT_SMALL}/transformed_metadata" \
+  --transform_savedmodel "${PREPROCESS_OUTPUT_SMALL}/transform_fn" \
+  --eval_data_paths "${PREPROCESS_OUTPUT_SMALL}/features_eval*" \
+  --train_data_paths "${PREPROCESS_OUTPUT_SMALL}/features_train*"
 ```
 
 To train the deep model:
 
 ```
-JOB_ID="smallclicks_deep_${USER}_$(date +%Y%m%d_%H%M%S)"
-gcloud beta ml jobs submit training "$JOB_ID" \
+JOB_ID="smallclicks_deep_$(date +%Y%m%d_%H%M%S)"
+gcloud ml-engine jobs submit training "$JOB_ID" \
   --module-name trainer.task \
   --package-path trainer \
   --staging-bucket "$BUCKET" \
@@ -214,12 +228,12 @@ gcloud beta ml jobs submit training "$JOB_ID" \
   --model_type deep \
   --hidden_units 600 600 600 600 \
   --batch_size 512 \
-  --output_path "${GCS_PATH}/output/${JOB_ID}" \
-  --raw_metadata_path "${GCS_PATH}/preproc/raw_metadata" \
-  --transformed_metadata_path "${GCS_PATH}/preproc/transformed_metadata" \
-  --transform_savedmodel "${GCS_PATH}/preproc/transform_fn" \
-  --eval_data_paths "${GCS_PATH}/preproc/features_eval*" \
-  --train_data_paths "${GCS_PATH}/preproc/features_train*"
+  --output_path "${GCS_PATH_SMALL}/model/${JOB_ID}" \
+  --raw_metadata_path "${PREPROCESS_OUTPUT_SMALL}/raw_metadata" \
+  --transformed_metadata_path "${PREPROCESS_OUTPUT_SMALL}/transformed_metadata" \
+  --transform_savedmodel "${PREPROCESS_OUTPUT_SMALL}/transform_fn" \
+  --eval_data_paths "${PREPROCESS_OUTPUT_SMALL}/features_eval*" \
+  --train_data_paths "${PREPROCESS_OUTPUT_SMALL}/features_train*"
 ```
 
 When using the [distributed configuration](config-small.yaml), the linear model
@@ -232,8 +246,8 @@ training progress.
 To train the linear model:
 
 ```
-JOB_ID="largeclicks_linear_${USER}_$(date +%Y%m%d_%H%M%S)"
-gcloud beta ml jobs submit training "$JOB_ID" \
+JOB_ID="largeclicks_linear_$(date +%Y%m%d_%H%M%S)"
+gcloud ml-engine jobs submit training "$JOB_ID" \
   --module-name trainer.task \
   --package-path trainer \
   --staging-bucket "$BUCKET" \
@@ -245,12 +259,12 @@ gcloud beta ml jobs submit training "$JOB_ID" \
   --model_type linear \
   --l2_regularization 3000 \
   --eval_steps 1000 \
-  --output_path "${GCS_PATH}/output/${JOB_ID}" \
-  --raw_metadata_path "${GCS_PATH}/preproc/raw_metadata" \
-  --transformed_metadata_path "${GCS_PATH}/preproc/transformed_metadata" \
-  --transform_savedmodel "${GCS_PATH}/preproc/transform_fn" \
-  --eval_data_paths "${GCS_PATH}/preproc/features_eval*" \
-  --train_data_paths "${GCS_PATH}/preproc/features_train*"
+  --output_path "${GCS_PATH_LARGE}/model/${JOB_ID}" \
+  --raw_metadata_path "${PREPROCESS_OUTPUT_LARGE}/raw_metadata" \
+  --transformed_metadata_path "${PREPROCESS_OUTPUT_LARGE}/transformed_metadata" \
+  --transform_savedmodel "${PREPROCESS_OUTPUT_LARGE}/transform_fn" \
+  --eval_data_paths "${PREPROCESS_OUTPUT_LARGE}/features_eval*" \
+  --train_data_paths "${PREPROCESS_OUTPUT_LARGE}/features_train*"
 ```
 
 To train the linear model without crosses, add the option `--ignore_crosses` and
@@ -259,8 +273,8 @@ use `--l2_regularization 1000` for best results.
 To train the deep model:
 
 ```
-JOB_ID="largeclicks_deep_${USER}_$(date +%Y%m%d_%H%M%S)"
-gcloud beta ml jobs submit training "$JOB_ID" \
+JOB_ID="largeclicks_deep_$(date +%Y%m%d_%H%M%S)"
+gcloud ml-engine jobs submit training "$JOB_ID" \
   --module-name trainer.task \
   --package-path trainer \
   --staging-bucket "$BUCKET" \
@@ -273,10 +287,10 @@ gcloud beta ml jobs submit training "$JOB_ID" \
   --hidden_units 1024 512 256 \
   --batch_size 512 \
   --eval_steps 250 \
-  --output_path "${GCS_PATH}/output/${JOB_ID}" \
-  --raw_metadata_path "${GCS_PATH}/preproc/raw_metadata" \
-  --transformed_metadata_path "${GCS_PATH}/preproc/transformed_metadata" \
-  --transform_savedmodel "${GCS_PATH}/preproc/transform_fn" \
-  --eval_data_paths "${GCS_PATH}/preproc/features_eval*" \
-  --train_data_paths "${GCS_PATH}/preproc/features_train*"
+  --output_path "${GCS_PATH_LARGE}/model/${JOB_ID}" \
+  --raw_metadata_path "${PREPROCESS_OUTPUT_LARGE}/raw_metadata" \
+  --transformed_metadata_path "${PREPROCESS_OUTPUT_LARGE}/transformed_metadata" \
+  --transform_savedmodel "${PREPROCESS_OUTPUT_LARGE}/transform_fn" \
+  --eval_data_paths "${PREPROCESS_OUTPUT_LARGE}/features_eval*" \
+  --train_data_paths "${PREPROCESS_OUTPUT_LARGE}/features_train*"
 ```

@@ -8,25 +8,24 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations under
 # the License.
+"""Defines a Wide + Deep model for classification on structured data.
 
-"""Define a Wide + Deep model for classification on structured data."""
+Tutorial on wide and deep: https://www.tensorflow.org/tutorials/wide_and_deep/
+"""
 
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import multiprocessing
-
 import tensorflow as tf
-from tensorflow.contrib import layers
-from tensorflow.contrib.learn.python.learn.utils import input_fn_utils
-
 
 # Define the format of your input data including unused columns
-CSV_COLUMNS = ['age', 'workclass', 'fnlwgt', 'education', 'education_num',
-               'marital_status', 'occupation', 'relationship', 'race', 'gender',
-               'capital_gain', 'capital_loss', 'hours_per_week', 'native_country',
-               'income_bracket']
+CSV_COLUMNS = [
+    'age', 'workclass', 'fnlwgt', 'education', 'education_num',
+    'marital_status', 'occupation', 'relationship', 'race', 'gender',
+    'capital_gain', 'capital_loss', 'hours_per_week', 'native_country',
+    'income_bracket'
+]
 CSV_COLUMN_DEFAULTS = [[0], [''], [0], [''], [0], [''], [''], [''], [''], [''],
                        [0], [0], [0], [''], ['']]
 LABEL_COLUMN = 'income_bracket'
@@ -39,38 +38,56 @@ INPUT_COLUMNS = [
 
     # For categorical columns with known values we can provide lists
     # of values ahead of time.
-    layers.sparse_column_with_keys(column_name='gender', keys=['female', 'male']),
+    tf.feature_column.categorical_column_with_vocabulary_list(
+        'gender', [' Female', ' Male']),
+    tf.feature_column.categorical_column_with_vocabulary_list(
+        'race', [
+            ' Amer-Indian-Eskimo', ' Asian-Pac-Islander', ' Black', ' Other',
+            ' White'
+        ]),
+    tf.feature_column.categorical_column_with_vocabulary_list(
+        'education', [
+            ' Bachelors', ' HS-grad', ' 11th', ' Masters', ' 9th',
+            ' Some-college', ' Assoc-acdm', ' Assoc-voc', ' 7th-8th',
+            ' Doctorate', ' Prof-school', ' 5th-6th', ' 10th', ' 1st-4th',
+            ' Preschool', ' 12th'
+        ]),
+    tf.feature_column.categorical_column_with_vocabulary_list(
+        'marital_status', [
+            ' Married-civ-spouse', ' Divorced', ' Married-spouse-absent',
+            ' Never-married', ' Separated', ' Married-AF-spouse', ' Widowed'
+        ]),
+    tf.feature_column.categorical_column_with_vocabulary_list(
+        'relationship', [
+            ' Husband', ' Not-in-family', ' Wife', ' Own-child', ' Unmarried',
+            ' Other-relative'
+        ]),
+    tf.feature_column.categorical_column_with_vocabulary_list(
+        'workclass', [
+            ' Self-emp-not-inc', ' Private', ' State-gov', ' Federal-gov',
+            ' Local-gov', ' ?', ' Self-emp-inc', ' Without-pay', ' Never-worked'
+        ]),
 
-    layers.sparse_column_with_keys(
-        column_name='race',
-        keys=[
-            'Amer-Indian-Eskimo',
-            'Asian-Pac-Islander',
-            'Black',
-            'Other',
-            'White'
-        ]
-    ),
-
-    # Otherwise we can use a hashing function to bucket the categories
-    layers.sparse_column_with_hash_bucket('education', hash_bucket_size=1000),
-    layers.sparse_column_with_hash_bucket('marital_status', hash_bucket_size=100),
-    layers.sparse_column_with_hash_bucket('relationship', hash_bucket_size=100),
-    layers.sparse_column_with_hash_bucket('workclass', hash_bucket_size=100),
-    layers.sparse_column_with_hash_bucket('occupation', hash_bucket_size=1000),
-    layers.sparse_column_with_hash_bucket('native_country', hash_bucket_size=1000),
+    # For columns with a large number of values, or unknown values
+    # We can use a hash function to convert to categories.
+    tf.feature_column.categorical_column_with_hash_bucket(
+        'occupation', hash_bucket_size=100, dtype=tf.string),
+    tf.feature_column.categorical_column_with_hash_bucket(
+        'native_country', hash_bucket_size=100, dtype=tf.string),
 
     # Continuous base columns.
-    layers.real_valued_column('age'),
-    layers.real_valued_column('education_num'),
-    layers.real_valued_column('capital_gain'),
-    layers.real_valued_column('capital_loss'),
-    layers.real_valued_column('hours_per_week'),
+    tf.feature_column.numeric_column('age'),
+    tf.feature_column.numeric_column('education_num'),
+    tf.feature_column.numeric_column('capital_gain'),
+    tf.feature_column.numeric_column('capital_loss'),
+    tf.feature_column.numeric_column('hours_per_week'),
 ]
 
-UNUSED_COLUMNS = set(CSV_COLUMNS) - {col.name for col in INPUT_COLUMNS} - {LABEL_COLUMN}
+UNUSED_COLUMNS = set(CSV_COLUMNS) - {col.name for col in INPUT_COLUMNS} - \
+    {LABEL_COLUMN}
 
-def build_estimator(model_dir, embedding_size=8, hidden_units=None):
+
+def build_estimator(config, embedding_size=8, hidden_units=None):
   """Build a wide and deep model for predicting income category.
 
   Wide and deep models use deep neural nets to learn high level abstractions
@@ -83,39 +100,39 @@ def build_estimator(model_dir, embedding_size=8, hidden_units=None):
   https://research.googleblog.com/2016/06/wide-deep-learning-better-together-with.html
 
   To define model we can use the prebuilt DNNCombinedLinearClassifier class,
-  and need only define the data transformations particular to our dataset, and then
+  and need only define the data transformations particular to our dataset, and
+  then
   assign these (potentially) transformed features to either the DNN, or linear
   regression portion of the model.
 
   Args:
-    model_dir: str, the model directory used by the Classifier for checkpoints
-      summaries and exports.
-    embedding_size: int, the number of dimensions used to represent categorical
-      features when providing them as inputs to the DNN.
+    config: (tf.contrib.learn.RunConfig) defining the runtime environment for
+      the estimator (including model_dir).
+    embedding_size: (int), the number of dimensions used to represent
+      categorical features when providing them as inputs to the DNN.
     hidden_units: [int], the layer sizes of the DNN (input layer first)
+
   Returns:
     A DNNCombinedLinearClassifier
   """
-  (gender, race, education, marital_status, relationship,
-   workclass, occupation, native_country, age,
-   education_num, capital_gain, capital_loss, hours_per_week) = INPUT_COLUMNS
-  """Build an estimator."""
-
+  (gender, race, education, marital_status, relationship, workclass, occupation,
+   native_country, age, education_num, capital_gain, capital_loss,
+   hours_per_week) = INPUT_COLUMNS
   # Reused Transformations.
   # Continuous columns can be converted to categorical via bucketization
-  age_buckets = layers.bucketized_column(
+  age_buckets = tf.feature_column.bucketized_column(
       age, boundaries=[18, 25, 30, 35, 40, 45, 50, 55, 60, 65])
 
   # Wide columns and deep columns.
   wide_columns = [
       # Interactions between different categorical features can also
       # be added as new virtual features.
-      layers.crossed_column(
-          [education, occupation], hash_bucket_size=int(1e4)),
-      layers.crossed_column(
-          [age_buckets, race, occupation], hash_bucket_size=int(1e6)),
-      layers.crossed_column(
-          [native_country, occupation], hash_bucket_size=int(1e4)),
+      tf.feature_column.crossed_column(['education', 'occupation'],
+                                       hash_bucket_size=int(1e4)),
+      tf.feature_column.crossed_column([age_buckets, race, 'occupation'],
+                                       hash_bucket_size=int(1e6)),
+      tf.feature_column.crossed_column(['native_country', 'occupation'],
+                                       hash_bucket_size=int(1e4)),
       gender,
       native_country,
       education,
@@ -127,14 +144,18 @@ def build_estimator(model_dir, embedding_size=8, hidden_units=None):
   ]
 
   deep_columns = [
-      layers.embedding_column(workclass, dimension=embedding_size),
-      layers.embedding_column(education, dimension=embedding_size),
-      layers.embedding_column(marital_status, dimension=embedding_size),
-      layers.embedding_column(gender, dimension=embedding_size),
-      layers.embedding_column(relationship, dimension=embedding_size),
-      layers.embedding_column(race, dimension=embedding_size),
-      layers.embedding_column(native_country, dimension=embedding_size),
-      layers.embedding_column(occupation, dimension=embedding_size),
+      # Use indicator columns for low dimensional vocabularies
+      tf.feature_column.indicator_column(workclass),
+      tf.feature_column.indicator_column(education),
+      tf.feature_column.indicator_column(marital_status),
+      tf.feature_column.indicator_column(gender),
+      tf.feature_column.indicator_column(relationship),
+      tf.feature_column.indicator_column(race),
+
+      # Use embedding columns for high dimensional vocabularies
+      tf.feature_column.embedding_column(
+          native_country, dimension=embedding_size),
+      tf.feature_column.embedding_column(occupation, dimension=embedding_size),
       age,
       education_num,
       capital_gain,
@@ -142,28 +163,29 @@ def build_estimator(model_dir, embedding_size=8, hidden_units=None):
       hours_per_week,
   ]
 
-  return tf.contrib.learn.DNNLinearCombinedClassifier(
-      model_dir=model_dir,
+  return tf.estimator.DNNLinearCombinedClassifier(
+      config=config,
       linear_feature_columns=wide_columns,
       dnn_feature_columns=deep_columns,
       dnn_hidden_units=hidden_units or [100, 70, 50, 25])
 
 
 def parse_label_column(label_string_tensor):
-  """Parses a string tensor into the label tensor
+  """Parses a string tensor into the label tensor.
+
   Args:
-    label_string_tensor: Tensor of dtype string. Result of parsing the
-    CSV column specified by LABEL_COLUMN
+    label_string_tensor: Tensor of dtype string. Result of parsing the CSV
+      column specified by LABEL_COLUMN.
+
   Returns:
     A Tensor of the same shape as label_string_tensor, should return
     an int64 Tensor representing the label index for classification tasks,
     and a float32 Tensor representing the value for a regression task.
   """
   # Build a Hash Table inside the graph
-  table = tf.contrib.lookup.string_to_index_table_from_tensor(
-      tf.constant(LABELS))
+  table = tf.contrib.lookup.index_table_from_tensor(tf.constant(LABELS))
 
-  # Use the hash table to convert string labels to ints
+  # Use the hash table to convert string labels to ints and one-hot encode
   return table.lookup(label_string_tensor)
 
 
@@ -172,91 +194,94 @@ def parse_label_column(label_string_tensor):
 # ************************************************************************
 
 
-def serving_input_fn():
-  """Builds the input subgraph for prediction.
+def csv_serving_input_fn():
+  """Build the serving inputs."""
+  csv_row = tf.placeholder(shape=[None], dtype=tf.string)
+  features = _decode_csv(csv_row)
+  features.pop(LABEL_COLUMN)
+  return tf.estimator.export.ServingInputReceiver(features,
+                                                  {'csv_row': csv_row})
 
-  This serving_input_fn accepts raw Tensors inputs which will be fed to the
-  server as JSON dictionaries. The values in the JSON dictionary will be
-  converted to Tensors of the appropriate type.
 
-  Returns:
-     tf.contrib.learn.input_fn_utils.InputFnOps, a named tuple
-     (features, labels, inputs) where features is a dict of features to be
-     passed to the Estimator, labels is always None for prediction, and
-     inputs is a dictionary of inputs that the prediction server should expect
-     from the user.
-  """
-  feature_placeholders = {
-      column.name: tf.placeholder(column.dtype, [None])
-      for column in INPUT_COLUMNS
-  }
-  # DNNCombinedLinearClassifier expects rank 2 Tensors, but inputs should be
-  # rank 1, so that we can provide scalars to the server
-  features = {
-    key: tf.expand_dims(tensor, -1)
-    for key, tensor in feature_placeholders.items()
-  }
-  return input_fn_utils.InputFnOps(
-    features,
-    None,
-    feature_placeholders
+def example_serving_input_fn():
+  """Build the serving inputs."""
+  example_bytestring = tf.placeholder(
+      shape=[None],
+      dtype=tf.string,
   )
+  features = tf.parse_example(
+      example_bytestring,
+      tf.feature_column.make_parse_example_spec(INPUT_COLUMNS))
+  return tf.estimator.export.ServingInputReceiver(
+      features, {'example_proto': example_bytestring})
 
 
-def generate_input_fn(filenames,
-                      num_epochs=None,
-                      shuffle=True,
-                      skip_header_lines=0,
-                      batch_size=40):
-  """Generates an input function for training or evaluation.
+# [START serving-function]
+def json_serving_input_fn():
+  """Build the serving inputs."""
+  inputs = {}
+  for feat in INPUT_COLUMNS:
+    inputs[feat.name] = tf.placeholder(shape=[None], dtype=feat.dtype)
+
+  return tf.estimator.export.ServingInputReceiver(inputs, inputs)
+
+
+# [END serving-function]
+
+SERVING_FUNCTIONS = {
+    'JSON': json_serving_input_fn,
+    'EXAMPLE': example_serving_input_fn,
+    'CSV': csv_serving_input_fn
+}
+
+
+def _decode_csv(line):
+  """Takes the string input tensor and returns a dict of rank-2 tensors."""
+
+  # Takes a rank-1 tensor and converts it into rank-2 tensor
+  # Example if the data is ['csv,line,1', 'csv,line,2', ..] to
+  # [['csv,line,1'], ['csv,line,2']] which after parsing will result in a
+  # tuple of tensors: [['csv'], ['csv']], [['line'], ['line']], [[1], [2]]
+  row_columns = tf.expand_dims(line, -1)
+  columns = tf.decode_csv(row_columns, record_defaults=CSV_COLUMN_DEFAULTS)
+  features = dict(zip(CSV_COLUMNS, columns))
+
+  # Remove unused columns
+  for col in UNUSED_COLUMNS:
+    features.pop(col)
+  return features
+
+
+def input_fn(filenames,
+             num_epochs=None,
+             shuffle=True,
+             skip_header_lines=0,
+             batch_size=200):
+  """Generates features and labels for training or evaluation.
+
+  This uses the input pipeline based approach using file name queue
+  to read data so that entire data is not loaded in memory.
+
   Args:
-      filenames: [str] list of CSV files to read data from.
-      num_epochs: int how many times through to read the data.
-        If None will loop through data indefinitely
-      shuffle: bool, whether or not to randomize the order of data.
-        Controls randomization of both file order and line order within
-        files.
-      skip_header_lines: int set to non-zero in order to skip header lines
-        in CSV files.
-      batch_size: int First dimension size of the Tensors returned by
-        input_fn
+      filenames: [str] A List of CSV file(s) to read data from.
+      num_epochs: (int) how many times through to read the data. If None will
+        loop through data indefinitely
+      shuffle: (bool) whether or not to randomize the order of data. Controls
+        randomization of both file order and line order within files.
+      skip_header_lines: (int) set to non-zero in order to skip header lines in
+        CSV files.
+      batch_size: (int) First dimension size of the Tensors returned by input_fn
+
   Returns:
-      A function () -> (features, indices) where features is a dictionary of
+      A (features, indices) tuple where features is a dictionary of
         Tensors, and indices is a single Tensor of label indices.
   """
-  def _input_fn():
-    files = tf.concat([
-      tf.train.match_filenames_once(filename)
-      for filename in filenames
-    ], axis=0)
+  dataset = tf.data.TextLineDataset(filenames).skip(skip_header_lines).map(
+      _decode_csv)
 
-    filename_queue = tf.train.string_input_producer(
-        files, num_epochs=num_epochs, shuffle=shuffle)
-    reader = tf.TextLineReader(skip_header_lines=skip_header_lines)
-
-    _, rows = reader.read_up_to(filename_queue, num_records=batch_size)
-
-    # DNNLinearCombinedClassifier expects rank 2 tensors.
-    row_columns = tf.expand_dims(rows, -1)
-    columns = tf.decode_csv(row_columns, record_defaults=CSV_COLUMN_DEFAULTS)
-    features = dict(zip(CSV_COLUMNS, columns))
-
-    # Remove unused columns
-    for col in UNUSED_COLUMNS:
-      features.pop(col)
-
-    if shuffle:
-      # This operation maintains a buffer of Tensors so that inputs are
-      # well shuffled even between batches.
-      features = tf.train.shuffle_batch(
-          features,
-          batch_size,
-          capacity=batch_size * 10,
-          min_after_dequeue=batch_size*2 + 1,
-          num_threads=multiprocessing.cpu_count(),
-          enqueue_many=True,
-          allow_smaller_final_batch=True
-      )
-    label_tensor = parse_label_column(features.pop(LABEL_COLUMN))
-    return features, label_tensor
-  return _input_fn
+  if shuffle:
+    dataset = dataset.shuffle(buffer_size=batch_size * 10)
+  iterator = dataset.repeat(num_epochs).batch(
+      batch_size).make_one_shot_iterator()
+  features = iterator.get_next()
+  return features, parse_label_column(features.pop(LABEL_COLUMN))
